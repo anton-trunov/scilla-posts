@@ -27,6 +27,8 @@ like money tokens. Move's type system, as the paper admits, will not ensure, for
 instance, that
 > the total value of all coins in existence is preserved by a call to `deposit`,
 because deep down money is represented as an unsigned integer value.
+Still, it's exciting to see advanced type systems making its way into the world
+of industrial programming.
 
 ### Fungible tokens, scarcity, and formal verification
 
@@ -78,7 +80,7 @@ issues with so called _re-entrancy_, which together with dynamic dispatch (see
 the next subsection) enabled the infamous DAO attack.
 
 These issues are resolved in Scilla by two design choices:
-- Scilla does not allowe external transition to mutate the calling contract's
+- Scilla does not permit external transition to mutate the calling contract's
   state directly;
 - Scilla's transitions cannot be interrupted in the middle, i.e. all the calls
   to external transitions via messages happen at the end of the current
@@ -87,9 +89,11 @@ These issues are resolved in Scilla by two design choices:
 Indeed, in the middle of execution, when our watch dog invariant is off guard,
 it's easy to violate contract's safety by calling an external transition which
 in its turn could call one of our currently executing contract's transitions
-back. If we are currently in a "bad" state where our safety invariants don't
+back. If we are presently in a "bad" state where our safety invariants don't
 hold, all bets are off, there is nothing to protect us except for the sheer
 luck.
+
+Now you can see that Scilla eliminates this sort of bugs by design.
 
 ### Dynamic dispatch
 
