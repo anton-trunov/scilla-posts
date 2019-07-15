@@ -3,7 +3,7 @@
 The recent release by Facebook introduced the [Move][move-overview] programming
 language for writing smart contracts for the Libra blockchain. Naturally, all
 the language geeks from the [Scilla][scilla-lang] language team rushed to try
-out this new and shiny piece of techonology. Here I present to you our findings
+out this new and shiny piece of technology. Here I present to you our findings
 in the form of a Scilla vs Move case study. In case you are not very familiar
 with Scilla I'd suggest to leaf through [Scilla Docs][scilla-manual].
 
