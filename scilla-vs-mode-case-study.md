@@ -2,10 +2,10 @@
 
 The recent release by Facebook introduced the [Move][move-overview] programming
 language for writing smart contracts for the Libra blockchain. Naturally, all
-the language geeks from the [Scilla][scilla-lang] language team rushed to try out this new and
-shiny piece of techonology. 
-Here I present to you our finding in the form of a Scilla vs Move case study.
-In case you are not very familiar with Scilla I'd suggest to leaf through [Scilla Docs][scilla-manual].
+the language geeks from the [Scilla][scilla-lang] language team rushed to try
+out this new and shiny piece of techonology. Here I present to you our findings
+in the form of a Scilla vs Move case study. In case you are not very familiar
+with Scilla I'd suggest to leaf through [Scilla Docs][scilla-manual].
 
 
 ## Earmarked Coin: problem definition
@@ -24,12 +24,91 @@ example of this family of contracts is the helloworld of smart contracts -- the
 [crowdfunding][scilla-crowdfunding] contract.
 
 
-## TODO(better title?): Creating resources
+## Solution in Move: the big picture
 
 
-Let's go over the solution in Move, translating it in a piecewise manner into Scilla.
+Money in Move is handled using _resources_, an abstraction that makes having
+multiple references to the same object not possible. This is to make sure money
+is scarce in the system and facilitate transfer of ownership over money.
+Technically, Move uses a linear type system to guarantee scarcity of resources.
+Linearity ensures that each resource must be used _exactly_ one time in a
+procedure. This looks a bit like the approach taken in the Rust programming
+language, which has affine type system ensuring that variables are used zero or
+one time only.
 
+Move's programming model is based on changing the sender's account as execution
+progresses. This point of view is quite different from Scilla's -- contracts are
+_not_ allowed to change user accounts in any way. Contracts are independent
+entites with their own accounts.
+
+In some sense Move's model assumes we have a _global_ bank with the global mapping
+of addresses (representing the "bank"'s clientele) to assets (resources). 
+Everybody can change their account by publishing new resources. Often a new
+resource will be a coin with some _relaxed_ notion of ownership.
+Linearity of resources ensures that users cannot loose or duplicate their assests
+when transforming their assets from one kind to another.
+
+On the other hand, Scilla's model presupposes that each contract is like a local
+bank. This means contracts commonly have their own local mappings of addresses
+to users' assets. The necessity of maintaining those local maps can be handled
+with by using a generic contract published alongside with the specific contract
+the programmer wants to deploy.
+
+To better understand the point made above, let's go over the solution in Move,
+translating it in a piecewise manner into Scilla. But before we dive into the
+implementation of the earmarked coin contract in Move, let me show you how one
+would _use_ the contract we are going to take apart and explain.
+
+To use the earmarked coin contract, Alice writes a _transaction script_ to
+program her interaction with the system. Suppose Alice owns some (let's say 100
+for the sake of example) Libra coins, the primary currency of the Libra
+blockchain. The values of `LibraCoin.T` type represent the primary currency on
+the formal level. The fact that Alice owns some Libra coins is reflected in the
+`balance` field of her `LibraAccount.T` resource. `LibraAccount` is sort of a
+high-level wrapper for `LibraCoin` as it supports more advanced authentication,
+keeps track of some statistics, etc. The `balance` field of `LibraAccount.T`
+resource has type `R#LibraCoin.T`, where `R#` is a syntactic clue hinting that
+we are dealing with a "resource". Bob has no means of accessing Alice's Libra
+coins because `LibraCoin.T` resource is very strict about ownership. So Alice
+needs to create a new resource `EarmarkedLibraCoin.T` (see below for its
+definition), which lets strangers get your money, but only if you explicitly
+let them. Creating a new earmarked coin _consumes_ a Libra coin of the same
+worth, meaning Alice needs to split a new coin off her account and tranform it
+into the earmarked coin she wants to create. So she invokes the following
+transaction script:
+
+```rust
+  // split a Libra coin from Alice's account into a temporary Libra coin
+  alice_libracoin = LibraAccount.withdraw_from_sender(move(amount));
+  // create and publish the earmarked coin under Alice's account
+  EarmarkedLibraCoin.create(move(alice_libracoin), move(bob_address));
+  // alice_libracoin is not accessible anymore, it's been consumed
 ```
+
+Notice that the move semantics makes it not possible to loose or duplicate money
+in this case.
+
+Now it's possible for Bob to get the earmarked coin, convert it to a Libra coin
+and publish under his account. To get the earmarked coin Bob needs to know the
+address it's been published under (`alice_address` below).
+
+```rust
+  // acquire ownership over the earmarked coin, this is not possible with Libra coin
+  bob_earmarked_coin = EarmarkedLibraCoin.claim_for_recipient(alice_address)
+  // turn the earmarked coin into a Libra coin
+  // the earmarked coin has been consumed and now Alice can't get the earmarked coin back
+  bob_libracoin = EarmarkedLibraCoin.unwrap(bob_earmarked_coin)
+  // publish the temporary coin under Bob's account
+  LibraAccoount.deposit(bob_address, move(bob_libraconi))
+```
+
+
+## Creating resources
+
+
+The earmarked coin contract in Move starts as follows:
+
+```rust
 // A module for earmarking a coin for a specific recipient
 module EarmarkedLibraCoin {
   import 0x0.LibraCoin;
@@ -50,18 +129,14 @@ Move's modules are a lot like Scilla's contracts: a module in Move is a
 > enforced by the Move type system ensures that the properties established for a
 > module’s types cannot be violated by code outside the module.
 
-The solution in Move creates a custom _resource_ type `T` by pairing a
-`LibraCoin.T` resource with the recipient's address. (Resource types are
-prefixes with `R#` in source code).
+The solution in Move creates a custom resource type `T` by pairing a
+`LibraCoin.T` resource with the recipient's address.
 
-A resource is an abstraction to handle a very important property of money -- scarcity.
 
-TODO: add a smooth transition between these paragraphs
-
-To create an earmarked coin, the sender's _transaction script_ would call the
+To create an earmarked coin, the sender's transaction script would call the
 function `create` defined within `EarmarkedLibraCoin` module:
 
-```
+```rust
   ...
   // Create a new earmarked coin with the given recipient.
   // Publish the coin under the transaction sender's account address.
@@ -77,17 +152,12 @@ function `create` defined within `EarmarkedLibraCoin` module:
   ...
 ```
 
-Move uses a linear type system to handle scarcity of resources. Linearity
-ensures that each resource must be used _exactly_ once in a procedure. This
-looks a bit like the approach taken in the Rust programming language, which has
-affine type system ensuring that variables are used zero or one time only.
-
 In the snippet above the `coin` parameter representing the funds the sender
 wants to earmark gets _moved_ into earmarked resource `t` (with `coin:
 move(coin)` statement), which makes the funds associated with `coin` not
 immediately available for the sender.
 The line
-```
+```rust
     move_to_sender<T>(move(t));
 ```
 publishes the newly created earmarked coin under the sender's account.
@@ -110,7 +180,7 @@ one account. This can be done
 
 If multiple users wanted to earmark funds for the recipients of their choice
 they would use a transaction script like the following one:
-```
+```rust
 import 0x0.LibraAccount;
 import 0x0.LibraCoin;
 import 0x42.EarmarkedLibraCoin;
@@ -137,16 +207,13 @@ their own balances to aqcuire ownership of funds transfered to them. A
 contract's `_balance` special mutable field stores a 128-bit unsigned integer
 reflecting the total funds accumulated by the contract, hence Scilla escrow-like
 contracts usually keep record of who exactly has transferred funds using an
-explicit global map of donors or backers. In other words, when programming in
-Scilla we need to think globally, as opposed to the local approach used in Move
-which leaves the bookkeeping of organizing transfers from multiple senders
-implicit.
+explicit map of donors or backers.
 
 Putting the explanation I just gave to work, here is how the corresponding
 contract could look like in Scilla (the version here is simplified for the sake
 of clarity of exposition, see the full version [here][scilla-earmarked-coin]):
 
-```
+```ocaml
 (* purely functional part of the contract *)
 library EarmarkedCoin
 
@@ -169,7 +236,7 @@ senders' addresses to paired funds and the intended recipients of those funds.
 The `earmarked_coins` map is empty when the contract is initialized.
 
 Let's look at thow the Scilla analogue of `create` procedure looks like:
-```
+```ocaml
 ...
 transition Earmark (recip : ByStr20)
   (* have we already earmarked funds? *)
@@ -189,7 +256,7 @@ The transition is named `Earmark` to indicate that there is a difference between
 Scilla and Move. The transition works as follows. First, we check that the
 sender haven't already earmarked funds, because each sender is only allowed to
 earmark for at most one person. If the sender has not earmarked funds yet, the
-contract accepts the transfer of fund by using the special `accept` builtin
+contract accepts the transfer of funds by using the special `accept` builtin
 statement. This increases the contract's `_balance` mutable field by `_amount`
 -- the implicit parameter of each Scilla transition and decreases the sender's
 balance by the same quantity. The next three statements create a new value of
@@ -203,7 +270,7 @@ the exact implementation, this is what Move's runtime does implicitly.
 
 Here is the Move implementation of `claim_for_recipient` function, returning an earmarked coin reserved for the caller:
 
-```
+```rust
 ...
   // Allow the transaction sender to claim a coin that was earmarked for her.
   public claim_for_recipient(earmarked_coin_address: address): R#Self.T {
@@ -221,7 +288,7 @@ Here is the Move implementation of `claim_for_recipient` function, returning an 
 
 The `move_from` function call lets the funds change ownership
 
-```
+```rust
     t = move_from<T>(move(earmarked_coin_address));
 ```
 
@@ -229,13 +296,13 @@ as the Move type system guarantees the original sender won't have access to that
 earmarked coin anymore.
 
 I should mention that the following line
-```
+```rust
     assert(*(&move(t_ref).recipient) == move(sender), 99);
 ```
 ensures that only the intended recipient can get the ownership over the earmarked coin.
 
 The corresponding transition in Scilla would look like so:
-```
+```ocaml
 transition ClaimForRecipient (earmarked_coin_address : ByStr20)
   e_coin_opt <- earmarked_coins[earmarked_coin_address];
   match e_coin_opt with
@@ -293,9 +360,10 @@ assistant using our work-in-progress framework.
 
 ## Reclaiming funds for creator
 
+
 The Move implementation of `claim_for_creator` is pretty straightforward:
 
-```
+```rust
 ...
   // Allow the creator of the earmarked coin to reclaim it.
   public claim_for_creator(): R#Self.T {
@@ -318,7 +386,7 @@ intended recipient from aqcuiring the ownership of it.
 
 The analogous transition in Scilla is also simpler than the `ClaimForRecipient` transition:
 
-```
+```ocaml
 transition ClaimForCreator ()
   e_coin_opt <- earmarked_coins[_sender];
   match e_coin_opt with
@@ -358,24 +426,15 @@ function:
 to strip the address component off the earmarked coin and turn it into a
 spendable Libra coin.
 
-The intended function call sequence showing how ownership transforms over an
-earmarked coin life cycle is as follows (in pseudocode):
-
-```
-  // split a Libra coin from the sender's account
-  alice_libracoin = LibraAccount.withdraw_from_sender(move(amount));
-  // publish the earmarked coin under Alice's account
-  EarmarkedLibraCoin.create(move(alice_libracoin), move(bob_address));
-  // acquire ownership over the earmarked coin
-  bob_earmarked_coin = EarmarkedLibraCoin.claim_for_recipient(alice_address)
-  // turn the earmarked coin into a Libra coin
-  bob_libracoin = EarmarkedLibraCoin.unwrap(bob_earmarked_coin)
-```
-
 
 ## Conclusion
 
-TODO
+
+In this blog post I tried to show the difference between the programming models
+of Move and Scilla. Each of the models has different sets of trade-offs and
+represent user-centric vs bank-centric points of view for Move and Scilla
+respectively.
+
 
 ## Acknowledgements 
 
@@ -399,3 +458,5 @@ Many thanks to Ilya Sergey, Amrit Kumar and Vaivaswatha Nagaraj for their numero
 <!-- https://www.blockchainandy.com/post/want-to-build-your-latest-dapp-on-one-of-the-fastest-and-lowest-fee-platforms -->
 <!-- https://levelup.gitconnected.com/getting-started-with-the-facebook-libra-programming-language-a1d21aa837e0 -->
 <!-- https://hackernoon.com/move-programming-language-the-highlight-of-libra-122a910d6e0f -->
+
+<!-- https://github.com/libra/libra/blob/4e27604264bd0a5d6c64427f738cbc84d9258a61/language/stdlib/modules/libra_account.mvir#L9 -->
